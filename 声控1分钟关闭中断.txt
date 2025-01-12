@@ -1,0 +1,103 @@
+#include <STC8G.H>
+
+// 定义引脚
+sbit InputPin = P5^4;  // 输入脚 P5.4
+sbit OutputPin = P3^3; // 输出脚 P3.3
+
+// 定义时间常量（单位：毫秒）
+#define TIME_DURATION 60000 // 1分钟
+
+// 全局变量声明
+unsigned char triggered = 0;      // 用于标记是否已经触发
+unsigned int timeCount = 0;       // 用于记录时间计数
+unsigned char timerExpired = 0;   // 标志位，表示定时器是否已到期
+unsigned char lastInputState = 0; // 记录上次输入状态
+
+// 定时器0中断服务函数
+void Timer0_Isr(void) interrupt 1 {
+    static unsigned int localTimeCount = 0;
+
+    // 重新加载定时器初值以获得大约1ms的定时周期
+    TL0 = 0xCD;
+    TH0 = 0xD4;
+
+    localTimeCount++;
+    
+    if (localTimeCount >= TIME_DURATION) {
+        localTimeCount = 0;
+        timerExpired = 1; // 设置标志位表示定时器到期
+        TR0 = 0;          // 停止定时器0
+        ET0 = 0;          // 关闭定时器0中断
+    }
+}
+
+// 初始化定时器0
+void Timer0_Init(void) {
+    AUXR |= 0x80;  // 设置定时器时钟为1T模式
+    TMOD &= 0xF0;
+    TMOD |= 0x01;  // 设置定时器0工作在模式1（16位定时器）
+
+    // 设置定时器初值以获得大约1ms的定时周期
+    TL0 = 0xCD;
+    TH0 = 0xD4;
+    
+    TF0 = 0;  // 清除TF0标志
+    TR0 = 0;  // 停止定时器0
+    ET0 = 0;  // 关闭定时器0中断
+    EA = 1;   // 使能总中断
+}
+
+// 初始化引脚模式
+void Pin_Init(void) {
+    // 将 P5.4 配置为标准双向口输入模式
+    P5M0 &= ~0x10;
+    P5M1 &= ~0x10;
+
+    // 将 P3.3 配置为强推挽输出模式
+    P3M0 |= 0x08;
+    P3M1 &= ~0x08;
+}
+
+// 简单延时函数
+void Delay(unsigned int ms) {
+    unsigned int i, j;
+    for (i = 0; i < ms; i++) {
+        for (j = 0; j < 1275; j++); // 这个值可以根据实际情况调整
+    }
+}
+
+void main(void) {
+    Timer0_Init();
+    Pin_Init();
+    OutputPin = 0; // 初始化输出脚为低电平
+
+    lastInputState = InputPin; // 初始设置lastInputState
+
+    while (1) {
+        unsigned char currentInputState = InputPin;
+
+        // 检测输入引脚的上升沿触发
+        if (currentInputState == 1 && lastInputState == 0 && !triggered) {
+            triggered = 1;
+            OutputPin = 1; // 输出高电平
+            timeCount = 0; // 重置时间计数器
+            timerExpired = 0; // 重置定时器到期标志位
+            ET0 = 1;          // 使能定时器0中断
+            TR0 = 1;          // 启动定时器0
+        }
+
+        // 如果定时器到期，则重置相关状态
+        if (timerExpired) {
+            OutputPin = 0; // 输出关闭
+            triggered = 0; // 重置触发标记
+            timerExpired = 0; // 重置定时器到期标志位
+            ET0 = 0;          // 关闭定时器0中断
+            TR0 = 0;          // 停止定时器0
+        }
+
+        lastInputState = currentInputState; // 更新上次输入状态
+
+        // 使用延时函数避免过快轮询
+        Delay(10);
+    }
+}
